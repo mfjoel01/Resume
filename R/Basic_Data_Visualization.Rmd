@@ -1,0 +1,134 @@
+---
+title: "Basic Data Visualizations"
+author: "Matthew Joel"
+output:
+  pdf_document: default
+---
+
+# Basic Data visualization in R
+
+Lets examine the **Stat2Data** package. The data set includes measurements for 3 different hawk species. The `Hawks` data frame has 908 observations on 19 variables:
+
+-   `Species`: `CH` = Cooper's, `RT` = Red-tailed, `SS` = Sharp-Shinned
+-   `Age`: `A` = Adult or `I` = Immature
+-   `Sex`: `F` = Female or `M` = Male
+-   `Wing`: Length (in mm) of primary wing feather from tip to wrist it attaches to
+-   `Weight`: Body weight (in g)
+-   `Culmen`: Length (in mm) of the upper bill from the tip to where it bumps into the fleshy part of the bird
+-   `Hallux`: Length (in mm) of the killing talon
+-   `Tail`: Measurement (in mm) related to the length of the tail (invented at the MacBride Raptor Center)
+-   `StandardTail`: Standard measurement of tail length (in mm)
+-   `Tarsus`: Length of the basic foot bone (in mm)
+-   `WingPitFat`: Amount of fat in the wing pit
+-   `KeelFat`: Amount of fat on the breastbone (measured by feel)
+
+```{r}
+library(Stat2Data)
+data("Hawks")
+library(ggplot2)
+
+```
+
+## Bar Chart of Species
+
+Here's a bar chart for the `Species` variable, mapping `Species` to the `x` aesthetic.
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Species)) +
+  geom_bar() 
+
+```
+
+## Analysis of Species Distribution
+
+From the `Species` distribution, we can learn that the Red-Tailed hawk (RT) is the most abundant species, with almost 600 occurrences. Sharp-Shinned hawks (SS) are the second most prevalent, with around half as many as the RT's (about 260). Last is the Cooper Hawk (CH), at approximately 75.
+
+## Histogram of Wing
+
+Let's make a histogram of the `Wing` variable, mapping `Wing` to the `x` aesthetic.
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Wing)) +
+  geom_histogram(bins=50)
+```
+
+## Analysis of Wing Distribution
+
+The wing data seems to be in an asymmetric bimodel distribution, with a slight skew left. There are some outliers at the far left and right, but most fall within the 2 humps. From this data we could learn that most hawks have wing lengths which fall within 2 ranges.
+
+## Density Plot of Weight
+
+Here's a **density** histogram of the `Weight` variable. In contrast to a standard histogram, the y-axis is constructed so that the total area of the histogram bars is 1.
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Weight)) + 
+  geom_histogram(aes(y = ..density..),binwidth=40,
+                 colour = 1, fill = "white")
+```
+
+## Density Curve
+
+Now let's overlay a density curve of `Weight` on the density histogram constructed in the previous problem. This can be done by adding a second layer to the ggplot displaying the density of `Weight`.
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Weight)) + 
+  geom_histogram(aes(y = ..density..),binwidth=40,
+                 colour = 1, fill = "white") +
+  geom_density(linetype="dashed",color=2,lwd = 1.2,fill = 2, alpha = 0.25)
+```
+
+## Boxplot without Facetting
+
+Boxplot of `Weight` for each `Species` in a single graphic, without using facetting:
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Species, y = Weight, fill = Species)) +
+  geom_boxplot() +
+  labs(x = "Species", y = "Weight") +
+  theme(legend.position = "none")
+```
+
+## Analysis of Species and Weight
+
+SS hawks are the lightest of the three species. All SS hawks weigh below 1250g, and the vast majority weigh between 100g and 200g. CH hawks are the second heaviest on average, with the majority of CH hawks weighing between 300 to 600g. RT hawks are the heaviest on average, but they also have the most variance. An RT hawk can weigh between 100g and 2200g, however the majority are in between 900g and 1200g.
+
+## Data Cleaning
+
+The `Sex` variable has a number of blank values, i.e., `""`. Let's convert the blank entries of this variable to `NA`.
+
+```{r, echo=TRUE}
+library(dplyr)
+
+Hawks <- Hawks %>%
+  mutate(Sex = na_if(Sex, ""))
+
+```
+
+## Violin Plot
+
+Violin plot of `Weight` for each `Sex`:
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Sex, y = Weight, fill = Sex)) +
+  geom_violin() +
+  labs(x = "Sex", y = "Weight")
+```
+
+## Analysis of Male and Female Weight
+
+Female hawks are heavier on average; the bulk of the female violin body is above that of the males. Male hawks have a much more strictly followed minimum weight: this means the weight of males cuts off under 120g. There are almost no males below 120g, while there still are some female hawks below 120g. Both have outliers past 1000g.
+
+## Distinguished Violin Plot
+
+A problem with the previous violin plot was that we didn't distinguish between `Species`. Let's fix this and construct a violin plot of `Weight` for each `Sex` that facets by `Species`.
+
+```{r, echo=TRUE}
+ggplot(Hawks, aes(x = Sex, y = Weight, fill = Sex)) +
+  geom_violin() +
+  labs(x = "Sex", y = "Weight") +
+  facet_grid(~ Species)
+```
+
+## Analysis of Sex-Species Violin Plot
+
+As we would expect based on the earlier species vs. weight graphs, RT hawks are the heaviest. We also see the same trend consistent in all species, that female hawks are heavier than male ones. SS male hawks have a huge variation in weight, being some of the lightest overall and the heaviest. This could indicated outlier data points. There is no violin for male RT hawks due to a lack of data or some error, but RT has a lot of NA values as well.

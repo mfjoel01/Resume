@@ -1,0 +1,62 @@
+ make -s
+ ./main
+Product ID: 1
+Name: Yesterday
+Price: $16.5
+Rating: 9.8
+Product Type: Audio
+Singer: Beetles 
+Genre: Rock
+
+
+Product ID: 2
+Name: I walk the line
+Price: $14.99
+Rating: 8.8
+Product Type: Audio
+Singer: Johnny Cash
+Genre: Rock
+
+
+Product ID: 3
+Name: I Wonder
+Price: $11.99
+Rating: 7
+Product Type: Audio
+Singer: Kanye West
+Genre: Rap
+
+
+Product ID: 4
+Name: Batman
+Price: $21.99
+Rating: 9.1
+Product Type: Video
+Director: Chris Nolan
+Rated: PG-13
+Release Year: 2008
+Run-time: 120
+
+Product ID: 5
+Name: Some Violent Movie
+Price: $5.99
+Rating: 8.1
+Product Type: Video
+Director: Quinten Tarantino
+Rated: R
+Release Year: 2004
+Run-time: 105
+
+Product ID: 6
+Name: Bible
+Price: $99.99
+Rating: 10
+Product Type: Paper Book
+Author: God 
+Length: 2000 pages
+
+
+Cart Owner: Sung Nam
+Number of items: 6
+Total Price: $171.45
+Average cost: $28.575
