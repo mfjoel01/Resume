@@ -1,0 +1,422 @@
+---
+title: "DIABLO Data Pre-Processing"
+format: pdf
+---
+
+## Dependencies
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+# Load required libraries
+library(tidyverse)    # Includes ggplot2, dplyr, etc.
+library(openxlsx)
+library(DESeq2)       # For RNA-Seq analysis
+library(pheatmap)     # For heatmap visualizations
+library(RColorBrewer) # For color palettes
+library(reshape2)     # For data reshaping
+library(pbapply)      # For progress bar in apply functions
+#library(limma)        # For linear modeling
+library(data.table)   # For data manipulation
+library(car)          # For advanced regression modeling
+library(Biobase)      # For Bioconductor data structures
+
+# Set global options
+options(stringsAsFactors = FALSE)
+```
+
+## Data Filtering
+
+### RNA seq
+
+1.  **Read in data & metadata**
+    -   Used `read.table()` (or `read.csv()`) to import counts and phenotype metadata.
+    -   Converted relevant columns (e.g., Sex) to factors.
+2.  **Match columns to metadata**
+    -   Ensured samples in the counts matrix matched those in the metadata (e.g., `counts[, metadata$File]`).
+3.  **Round counts**
+    -   RNA-Seq quantification tools can output fractional counts; these were rounded to integers.
+4.  **Filter low-expressed genes by CPM**
+    -   Computed counts per million (CPM).
+    -   Kept genes with CPM \> 5 in at least a minimum number of samples.
+5.  **Variance-stabilizing transformation (VST) via DESeq2**
+    -   Created a `DESeqDataSet` with a design formula (e.g., `~ ILA + Age + Sex`).
+    -   Performed variance-stabilizing transformation (`varianceStabilizingTransformation`).
+    -   Extracted the VST-transformed expression matrix.
+6.  **Regress out covariates**
+    -   For each gene, fit a linear model $(\mathrm{expression} \sim \mathrm{Sex} + \mathrm{Age})$.
+    -   Extracted residuals to remove those effects, producing a residual expression matrix.
+7.  **Save residuals**
+    -   Wrote out the final residual matrix (rows = genes, columns = samples) for downstream analysis.
+
+```{r}
+## Read in RNA seq reads file 
+counts <- read.table(file = "rnaseq/nosexmito_joyceavram_rnaseq_tx2gene.kallisto_counts.tsv", 
+                     header = TRUE)
+                     
+#counts.rds <- readRDS(file = "salmon.merged.gene_counts_length_scaled.tsv")
+
+## round the counts table
+counts <- round(counts)
+
+## Read in the metadata
+metadata <- read.csv(file = "PrePF_ILA_DE_MarkDX_phenotype.csv")
+metadata$Sex <- factor(metadata$Sex)
+
+## subset RNA-Seq to those in metadata
+counts <- counts[,metadata$File]
+
+###  Doing CPM filtering
+cpm_mat = apply(counts, 2, function(x){
+  return(x / sum(x) * 1000000)
+})
+
+#min_grp_size <- min(table(smd$Subgroup))
+min_grp_size <- 10
+idx_keep <- rowSums(cpm_mat > 5) >= min_grp_size
+
+counts_only_filt <- counts[idx_keep, ]
+cpm_filt <- cpm_mat[idx_keep, ]
+#gene_ids_filt <- gene_ids[idx_keep, ]
+
+### DESeq2 VST for normalization ###
+dds <- DESeqDataSetFromMatrix(countData = counts_only_filt,
+                              colData = metadata,
+                              design = ~ ILA + Age + Sex)
+vsd <- varianceStabilizingTransformation(dds, blind = F, fitType = "parametric")
+expr_vsd <- assay(vsd)
+
+### Regress out covariates using lm
+
+expr_df_resid = bind_rows(pblapply(1:nrow(expr_vsd), function(ii){
+  dsub = metadata %>% mutate(expr = as.numeric(expr_vsd[ii, ]))
+  fsub = lm(expr ~ as.factor(Sex) + Age, data = dsub)
+  ret = data.frame(matrix(resid(fsub), nrow = 1))
+  return(ret)
+}))
+
+rownames(expr_df_resid) <- rownames(expr_vsd)
+colnames(expr_df_resid) <- colnames(expr_vsd)
+
+### Dataset for DIABLO analysis
+
+write.csv(expr_df_resid, file = "rnaseq/rnaseq_filtered.csv")
+
+```
+
+### **Proteomics**
+
+1.  **Read in protein data & metadata**
+    -   Imported a CSV file of proteomic counts (rows = subjects, columns = proteins).
+    -   Imported phenotype metadata (also rows = subjects).
+    -   Ensured “Sex” is a factor, etc.
+2.  **Match subjects between protein data and metadata**
+    -   Used a common ID column (e.g., `BCP_ID`) to subset both data frames so they contain the same set of subjects in the same order.
+3.  **Log2-transform**
+    -   Proteomics data only needed a straightforward $(\log_2)$ transform to stabilize variance (no DESeq2 VST).
+    -   e.g., `protein_log2 <- log2(protein_sub + 1)`.
+4.  **Regress out covariates**
+    -   For each protein (column), fit a linear model $(\mathrm{expr} \sim \mathrm{Age} + \mathrm{Sex})$.
+    -   Extracted the residuals to remove Age and Sex effects.
+    -   Transposed the resulting matrix to ensure rows = subjects, columns = proteins.
+5.  **Save residuals**
+    -   Converted row names (subject IDs) into a column (`BCP_ID`).
+    -   Wrote out a CSV with one row per subject and one column per protein, containing the residualized protein intensities.
+
+```{r}
+###############################################################################
+# 1. Read in data
+###############################################################################
+# -- Protein data (rows = subject IDs, columns = proteins)
+protein <- read.csv("proteomic/CADET_Plasma_Proteins_raw_counts_v2.csv", stringsAsFactors = FALSE)
+
+# Make the first column (BCP_SubjectID) into row names
+rownames(protein) <- protein$BCP_SubjectID
+protein <- protein[, -1]  # remove the BCP_SubjectID column now that it’s row names
+
+# -- Metadata (one row per subject)
+metadata <- read.csv("PrePF_ILA_DE_MarkDX_phenotype.csv", stringsAsFactors = FALSE)
+
+# Convert Sex to a factor
+metadata$Sex <- factor(metadata$Sex)
+
+###############################################################################
+# 2. Align subjects between protein data and metadata
+###############################################################################
+# 2.1 Identify common subject IDs
+common_ids <- intersect(rownames(protein), metadata$BCP_ID)
+
+# 2.2 Subset protein data to only those subjects that appear in metadata
+protein_sub <- protein[common_ids, ]
+
+# 2.3 Subset metadata to only those subjects in 'common_ids'
+metadata_sub <- metadata[metadata$BCP_ID %in% common_ids, ]
+
+# 2.4 Reorder metadata_sub so it matches the order of rows in protein_sub
+metadata_sub <- metadata_sub[match(rownames(protein_sub), metadata_sub$BCP_ID), ]
+
+
+###############################################################################
+# 3. Log2-transform the protein data
+###############################################################################
+# in case of zeros in data, add 1 to avoid log(0)
+protein_log2 <- log2(protein_sub + 1)
+
+###############################################################################
+# 4. Regress out covariates (Age and Sex)
+###############################################################################
+residual_list <- pblapply(seq_len(ncol(protein_log2)), function(j) {
+  # Combine the metadata and the j-th protein’s log2 expression
+  dsub <- data.frame(
+    expr = protein_log2[, j],
+    Age  = metadata_sub$Age,
+    Sex  = metadata_sub$Sex
+  )
+  
+  # Fit linear model
+  fit <- lm(expr ~ Age + Sex, data = dsub)
+  
+  # Return residuals as a one-row data frame
+  # (one row per protein, columns = residual per subject)
+  data.frame(t(resid(fit)))
+})
+
+# Combine list of data frames (one per protein) into a single data frame
+# This will produce a (#Proteins) x (#Subjects) shape
+residual_mat <- bind_rows(residual_list)
+
+# Convert to matrix for easy transposition
+residual_mat <- as.matrix(residual_mat)
+
+# Transpose so that rows = subjects, columns = proteins
+residual_mat <- t(residual_mat)
+
+# Now match row/column names back to the log2 matrix
+colnames(residual_mat) <- colnames(protein_log2)  # protein names
+rownames(residual_mat) <- rownames(protein_log2)  # subject IDs
+
+###############################################################################
+# 5. Convert to data frame & include BCP_ID in the first column
+###############################################################################
+residual_df <- as.data.frame(residual_mat)
+residual_df <- tibble::rownames_to_column(residual_df, var = "BCP_ID")
+
+###############################################################################
+# 6. Write out residual data
+###############################################################################
+write.csv(residual_df, 
+          file = "proteomic/proteomic_final.csv", 
+          row.names = FALSE)
+#######################################################################
+```
+
+### Methylation
+
+1.  **Data Loading and Annotation:**
+    -   Methylation data and phenotypic data are loaded from specified file paths.
+    -   Annotation data for CpG sites is referenced to ensure all probes are represented.
+2.  **Filtering and Subsetting:**
+    -   CpG sites are filtered to ensure they are on the same chromosome as SNPs.
+    -   Gene variances and coefficients of variation (CV) are calculated for each probe.
+    -   The dataset is subset to include the top 20,000 CpG sites with the highest CV for further analysis.
+3.  **Exploration of Missing Data:**
+    -   A check is performed to confirm there are no missing values in the subsetted methylation data.
+4.  **Data Alignment and Regression:**
+    -   Phenotypic data is reordered to align with methylation data.
+    -   Linear regression is used to regress out covariates such as age and sex from the methylation data, resulting in residuals.
+5.  **Exporting Final Datasets:**
+    -   Residualized methylation data and aligned phenotypes are written to CSV files for downstream analysis.
+
+```{r}
+## Created by Rachel Blumhagen
+## Created on December 18, 2024
+## Description of script: to perform differential methylation on harvard ILA omics data
+## Last updated:
+
+## set working directory
+
+# library loads
+#library(limma)
+#library(openxlsx)
+#library(data.table)
+#library(car)
+#library(Biobase)
+#library(lmerSeq)
+#library(dplyr)
+#library(ggplot2)
+
+# Need to filter to cpg sites on same chromosome as SNP
+#methylation_m <- readRDS('/shared/schwartzlab/internal/data/CADET_PrePF_ILA/methylation/cadet_2024/m.rds')
+#methylation_m <- fread('analysis_data/MValues_raw.csv')
+#phenotypes <- readRDS('/shared/schwartzlab/internal/data/CADET_PrePF_ILA/methylation/cadet_2024/pd.rds')
+
+## pull annotation data
+#  https://zwdzwd.github.io/InfiniumAnnotation
+#annot <- read.table('/shared/schwartzlab/internal/data/CADET_PrePF_ILA/methylation/cadet_2024/EPIC.hg38.manifest.gencode.v36.tsv.gz')
+
+## check all probes are in annotation file
+#table(rownames(methylation_m) %in% as.character(annot$probeID))
+#annot$CpG_chrm
+
+### Subset down to most variable probes
+###   Calculating gene variance and CV for subsetting for heat map and another PCA   
+#gene_vars = data.frame(gene = rownames(methylation_m), 
+#                       gene_var = apply(methylation_m, MARGIN = 1, var),
+#                       gene_cv = apply(methylation_m, MARGIN = 1, function(x){
+#                         return(sd(x) / mean(x))
+#                       })) %>% 
+#  arrange(desc(gene_cv))
+#summary(gene_vars)
+
+## subset to top 20k CpGs based on CV
+#methylation_sub <- methylation_m[gene_vars[1:20000,]$gene,]
+
+## explore missinging
+#table(is.na(methylation_sub)) # no missing values in top 20k
+
+## order phenotypes to same as methylation
+#phenotypes <- phenotypes[colnames(methylation_sub),]
+
+### Regress out age and sex
+### Regress out covariates using lm
+#methylation_sub_resid = bind_rows(pblapply(1:nrow(methylation_sub), function(ii){
+#  dsub = phenotypes %>% mutate(expr = as.numeric(methylation_sub[ii, ]))
+#  fsub = lm(expr ~ as.factor(Sex) + Age, data = dsub)
+#  ret = data.frame(matrix(resid(fsub), nrow = 1))
+#  return(ret)
+#}))
+
+#rownames(methylation_sub_resid) <- rownames(methylation_sub)
+#colnames(methylation_sub_resid) <- colnames(methylation_sub)
+
+## write out final dataset 
+
+```
+
+## Data Matching
+
+### RNA seq
+
+```{r}
+# Read the CSV file
+rnaseq <- read.csv("rnaseq/rnaseq_filtered.csv", header = TRUE, row.names = 1)
+metadata <- read.csv("PrePF_ILA_DE_MarkDX_phenotype.csv", stringsAsFactors = FALSE)
+
+# Transpose the data
+rnaseq_transposed <- t(rnaseq)
+
+# Add row names as a new column and set the column name to "File"
+rnaseq_transposed <- cbind(File = rownames(rnaseq_transposed), rnaseq_transposed)
+
+# Match the "File" column in rnaseq_transposed with metadata and extract "BCP_ID"
+rnaseq_transposed <- merge(
+  metadata[, c("File", "BCP_ID")], # Select only "File" and "BCP_ID" from metadata
+  rnaseq_transposed,              # rnaseq_transposed dataframe
+  by = "File",                    # Match based on the "File" column
+  all.x = FALSE                   # Keep only matching rows
+)
+
+# Rearrange columns: Place "BCP_ID" as the first column
+rnaseq_transposed <- rnaseq_transposed[, c("BCP_ID", setdiff(names(rnaseq_transposed), c("BCP_ID", "File")))]
+
+# View the updated dataframe
+head(rnaseq_transposed)
+
+# Write the transposed data to a new CSV file
+write.csv(rnaseq_transposed, "rnaseq/rnaseq_final.csv", row.names = FALSE)
+
+```
+
+### Methylation
+
+```{r}
+
+# Read the CSV file
+methylation <- read.csv("methylation/DIABLO_methylation_filtered_residuals.csv", header = TRUE, row.names = 1, check.names = FALSE)
+methylation_metadata <- read.csv("methylation/DIABLO_methylation_phenotypes.csv", stringsAsFactors = FALSE)
+
+
+# Transpose the data
+methylation_transposed <- t(methylation)
+methylation_transposed <- cbind(Basename = rownames(methylation_transposed), methylation_transposed)
+
+
+methylation_transposed <- merge(
+  methylation_metadata[, c("Basename", "original.id")],
+  methylation_transposed,              
+  by = "Basename",                    
+  all.x = FALSE                   
+)
+
+methylation_transposed <- methylation_transposed[, c("original.id", setdiff(names(methylation_transposed), c("original.id", "Basename")))]
+# Rename "original.id" to "BCP_ID"
+colnames(methylation_transposed)[colnames(methylation_transposed) == "original.id"] <- "BCP_ID"
+
+head(methylation_transposed)
+
+# Write the transposed data to a new CSV file
+write.csv(methylation_transposed, "methylation/methylation_final.csv", row.names = FALSE)
+```
+
+### Subsetting
+
+```{r}
+phenotype <- read.csv("PrePF_ILA_DE_MarkDX_phenotype.csv", stringsAsFactors = FALSE)
+rnaseq <- read.csv("rnaseq/rnaseq_final.csv", stringsAsFactors = FALSE)
+protein <- read.csv("proteomic/proteomic_final.csv", stringsAsFactors = FALSE)
+methylation <- read.csv("methylation/methylation_final.csv", stringsAsFactors = FALSE)
+```
+
+```{r}
+# Find the common IDs across all datasets
+common_ids <- intersect(
+  intersect(intersect(rnaseq$BCP_ID, protein$BCP_ID), methylation$BCP_ID),
+  phenotype$BCP_ID
+)
+
+# Subset each dataset by the common IDs
+rnaseq_subset <- rnaseq[rnaseq$BCP_ID %in% common_ids, ]
+protein_subset <- protein[protein$BCP_ID %in% common_ids, ]
+methylation_subset <- methylation[methylation$BCP_ID %in% common_ids, ]
+phenotype_subset <- phenotype[phenotype$BCP_ID %in% common_ids, ]
+
+# Print the dimensions of the subsets
+dim(rnaseq_subset)
+dim(protein_subset)
+dim(methylation_subset)
+dim(phenotype_subset)
+
+# Write the subset data frames to CSV
+write.csv(rnaseq_subset, "rnaseq/rnaseq_final_subset.csv", row.names = FALSE)
+write.csv(protein_subset, "proteomic/proteomic_final_subset.csv", row.names = FALSE)
+write.csv(methylation_subset, "methylation/methylation_final_subset.csv", row.names = FALSE)
+write.csv(phenotype_subset, "PrePF_ILA_DE_MarkDX_phenotype_subset.csv", row.names = FALSE)
+
+```
+
+### Preparing Phenotype
+
+```{r}
+# Load the dataset
+phenotype <- read.csv("PrePF_ILA_DE_MarkDX_phenotype_subset.csv", stringsAsFactors = FALSE)
+
+# Count 1s and 0s in the 'FibroticILA' column
+fibrotic_counts <- table(phenotype$FibroticILA)
+
+# Count 1s and 0s in the 'ILA' column
+ila_counts <- table(phenotype$ILA)
+
+# Print the results
+cat("Counts for FibroticILA:\n")
+print(fibrotic_counts)
+
+cat("\nCounts for ILA:\n")
+print(ila_counts)
+
+# Retain only the 'BCP_ID' and 'FibroticILA' columns
+phenotype <- phenotype[, c("BCP_ID", "FibroticILA")]
+
+# View the updated dataset
+head(phenotype)
+
+write.csv(phenotype, "phenotype_final_subset.csv", row.names = FALSE)
+
+```

@@ -1,0 +1,271 @@
+---
+title: "DIABLO Analysis of Fibrotic ILA - 4 component"
+format: pdf
+---
+
+## Dependencies
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+
+# Load required libraries
+library(tidyverse)    # Includes ggplot2, dplyr, etc.
+library(openxlsx)
+library(DESeq2)       # For RNA-Seq analysis
+library(pheatmap)     # For heatmap visualizations
+library(RColorBrewer) # For color palettes
+library(reshape2)     # For data reshaping
+library(pbapply)      # For progress bar in apply functions
+#library(limma)        # For linear modeling
+library(data.table)   # For data manipulation
+library(car)          # For advanced regression modeling
+library(Biobase)      # For Bioconductor data structures
+library(mixOmics)
+library(BiocParallel)
+library(parallel)
+detectCores()  # Number of cores available on your machine
+
+# Set global options
+options(stringsAsFactors = FALSE)
+BPPARAM <- SnowParam(workers = 14)
+
+```
+
+## Importing Data
+```{r}
+methylation <- read.csv("Final_Datasets/methylation_final_subset.csv",
+                        row.names = 1,           # Use the first column (BCP_ID) as row names
+                        stringsAsFactors = FALSE, # Keep character columns as characters
+                        check.names = FALSE)      # Do not modify column names
+
+proteomic <- read.csv("Final_Datasets/proteomic_final_subset.csv",
+                      row.names = 1,
+                      stringsAsFactors = FALSE,
+                      check.names = FALSE)
+
+rnaseq <- read.csv("Final_Datasets/rnaseq_final_subset.csv",
+                   row.names = 1,
+                   stringsAsFactors = FALSE,
+                   check.names = FALSE)
+
+phenotype <- read.csv("Final_Datasets/phenotype_final_subset.csv",
+                      row.names = 1,
+                      stringsAsFactors = FALSE,
+                      check.names = FALSE)
+
+
+```
+
+
+```{r}
+
+methylation <- methylation[match(rownames(phenotype), rownames(methylation)), , drop = FALSE]
+
+proteomic <- proteomic[match(rownames(phenotype), rownames(proteomic)), , drop = FALSE]
+
+rnaseq <- rnaseq[match(rownames(phenotype), rownames(rnaseq)), , drop = FALSE]
+
+all(rownames(methylation) == rownames(phenotype)) # Should return TRUE
+all(rownames(proteomic) == rownames(phenotype))   # Should return TRUE
+all(rownames(rnaseq) == rownames(phenotype))      # Should return TRUE
+
+```
+
+```{r}
+
+X <- list(
+  methylation = methylation,
+  proteomic = proteomic,
+  rnaseq = rnaseq
+)
+
+Y <- as.factor(phenotype$FibroticILA)
+
+design <- matrix(0.5, ncol = length(X), nrow = length(X),
+                 dimnames = list(names(X), names(X)))
+diag(design) <- 0
+
+```
+
+```{r}
+# diablo.tcga <- block.plsda(X, Y, ncomp = 10, design = design)
+# 
+# perf.diablo.tcga = perf(diablo.tcga, validation = 'Mfold', folds = 10, nrepeat = 10)
+# 
+# perf.diablo.tcga$error.rate
+# 
+# plot(perf.diablo.tcga)
+# 
+# perf.diablo.tcga$choice.ncomp$WeightedVote
+# 
+# ncomp <- perf.diablo.tcga$choice.ncomp$WeightedVote["Overall.BER", "mahalanobis.dist"]
+
+
+```
+
+
+```{r}
+ 
+# test.keepX <- list(
+#   methylation = c(5:9, seq(10, 25, 5)),
+#   proteomic = c(5:9, seq(10, 25, 5)),
+#   rnaseq = c(5:9, seq(10, 25, 5)))
+# 
+# tune.result <- tune.block.splsda(
+#     X = X,
+#     Y = Y,
+#     ncomp = 4,
+#     test.keepX = test.keepX,
+#     design = design,
+#     validation = 'Mfold',
+#     folds = 10,
+#     nrepeat = 10,
+#     dist = "mahalanobis.dist",
+#     progressBar = TRUE,
+#     BPPARAM = BPPARAM
+# )
+# 
+# 
+# list.keepX <- tune.result$choice.keepX
+# # Save the list.keepX object to an .rds file
+# saveRDS(list.keepX, file = "list_keepX.rds")
+# # Load the list.keepX object from the .rds file
+
+```
+
+
+```{r}
+
+list.keepX <- readRDS("list_keepX_n4.rds")
+
+list.keepX
+
+diablo.tcga <- block.splsda(X = X, Y = Y, ncomp = 4, keepX = list.keepX, design = design)
+diablo.tcga$design
+
+```
+
+```{r}
+plotDiablo(diablo.tcga, ncomp = 1)
+
+plotDiablo(diablo.tcga, ncomp = 2)
+
+plotDiablo(diablo.tcga, ncomp = 3)
+
+plotDiablo(diablo.tcga, ncomp = 4)
+
+
+plotIndiv(diablo.tcga, ind.names = FALSE, legend = TRUE, title = 'Sample Plot')
+
+plotArrow(diablo.tcga, ind.names = FALSE, legend = TRUE,
+          title = 'Arrow Plot')
+
+plotVar(diablo.tcga, var.names = FALSE, legend = TRUE, title = 'Correlation Circle Variable Plot')
+
+circosPlot(diablo.tcga, cutoff = 0.7, title = 'Circos Plot', size.labels = 1.5)
+
+network(diablo.tcga, blocks = c(1,2,3),
+        cutoff = 0.77,
+        color.node = c('darkorchid', 'brown1', 'lightgreen'),
+        save = 'png', name.save = 'graphs/network_n4.png'
+)
+
+```
+
+```{r}
+plotLoadings(diablo.tcga, comp = 1, contrib = 'max', method = 'median')
+
+```
+
+```{r}
+# cimDiablo(diablo.tcga, color.blocks = c('darkorchid', 'brown1', 'lightgreen'),
+#           comp = 4, margin=c(8,20), legend.position = "right")
+
+```
+
+
+
+```{r}
+# # Set desired width, height, and resolution
+# # in pixels
+# img_res <- 100     # in ppi
+# 
+# # plotDiablo
+# for (i in 1:4) {
+#   png(filename = paste0("graphs/plotDiablo_n", i, ".png"),
+#       width = img_width, height = img_height, res = img_res)
+#   plotDiablo(diablo.tcga, ncomp = i)
+#   dev.off()
+# }
+# 
+# # plotIndiv
+# png(filename = "graphs/plotIndiv_n4.png", res = img_res)
+# plotIndiv(diablo.tcga, ind.names = FALSE, legend = TRUE, title = 'Sample Plot')
+# dev.off()
+# 
+# 
+# # plotArrow
+# png(filename = "graphs/plotArrow_n4.png", res = img_res)
+# plotArrow(diablo.tcga, ind.names = FALSE, legend = TRUE, title = 'Arrow Plot')
+# dev.off()
+# 
+# # plotVar
+# png(filename = "graphs/plotVar_n4.png", res = img_res)
+# plotVar(diablo.tcga, var.names = FALSE, legend = TRUE, title = 'Correlation Circle Variable Plot')
+# dev.off()
+# 
+# # circosPlot
+# png(filename = "graphs/circosPlot_n4.png", res = img_res)
+# circosPlot(diablo.tcga, cutoff = 0.7, title = 'Circos Plot', size.labels = 1.5)
+# dev.off()
+# 
+# # network
+# network(diablo.tcga, blocks = c(1,2,3), 
+#         cutoff = 0.88,
+#         color.node = c('darkorchid', 'brown1', 'lightgreen'),
+#         save = 'png', name.save = 'graphs/network_n4.png'
+# )
+# 
+# # plotLoadings
+# png(filename = "graphs/plotLoadings_n4.png", res = img_res)
+# plotLoadings(diablo.tcga, comp = 4, contrib = 'max', method = 'median')
+# dev.off()
+# 
+# 
+# # cimDiablo
+# png(filename = "graphs/cimDiablo_n4.png", res = img_res)
+# cimDiablo(diablo.tcga, color.blocks = c('darkorchid', 'brown1', 'lightgreen'),
+#           comp = 4, margin = c(8,20), legend.position = "right")
+# dev.off()
+```
+
+
+
+```{r}
+# perf.diablo.tcga <- perf(diablo.tcga,  validation = 'Mfold', folds = 10, 
+#                          nrepeat = 10, dist = 'mahalanobis.dist')
+# 
+# perf.diablo.tcga$MajorityVote.error.rate
+# 
+# perf.diablo.tcga$WeightedVote.error.rate
+
+```
+
+```{r}
+auc.diablo.tcga <- auroc(diablo.tcga, roc.block = "methylation", roc.comp = 4,
+                   print = FALSE)
+```
+
+
+```{r}
+auc.diablo.tcga <- auroc(diablo.tcga, roc.block = "proteomic", roc.comp = 4,
+                   print = FALSE)
+```
+
+
+```{r}
+auc.diablo.tcga <- auroc(diablo.tcga, roc.block = "rnaseq", roc.comp = 4,
+                   print = FALSE)
+```
+
+
+
